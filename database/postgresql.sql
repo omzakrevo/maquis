@@ -1,0 +1,43 @@
+-- MAQUIS & RESTO PRO - PostgreSQL SaaS schema (initial foundation)
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TABLE tenants (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name text NOT NULL, status text NOT NULL DEFAULT 'active' CHECK(status IN ('active','suspended')), created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE establishments (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id uuid NOT NULL REFERENCES tenants(id), name text NOT NULL, kind text NOT NULL CHECK(kind IN ('maquis','restaurant','mixed')), created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(id,tenant_id));
+CREATE TABLE app_users (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id uuid NOT NULL REFERENCES tenants(id), auth_user_id uuid UNIQUE, display_name text NOT NULL, active boolean NOT NULL DEFAULT true, UNIQUE(id,tenant_id));
+CREATE TABLE employee_assignments (tenant_id uuid NOT NULL REFERENCES tenants(id), establishment_id uuid NOT NULL, user_id uuid NOT NULL, role text NOT NULL CHECK(role IN ('owner','manager','cashier','server','cook','bartender')), PRIMARY KEY(establishment_id,user_id), FOREIGN KEY(establishment_id,tenant_id) REFERENCES establishments(id,tenant_id), FOREIGN KEY(user_id,tenant_id) REFERENCES app_users(id,tenant_id));
+CREATE TABLE subscription_plans (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), code text UNIQUE NOT NULL, monthly_price_xof bigint NOT NULL CHECK(monthly_price_xof>=0), device_limit integer NOT NULL CHECK(device_limit>0));
+CREATE TABLE subscriptions (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id uuid NOT NULL REFERENCES tenants(id), plan_id uuid NOT NULL REFERENCES subscription_plans(id), starts_at timestamptz NOT NULL, ends_at timestamptz NOT NULL, status text NOT NULL CHECK(status IN ('trial','active','grace','expired','cancelled')), CHECK(ends_at>starts_at));
+CREATE TABLE subscription_payments (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), subscription_id uuid NOT NULL REFERENCES subscriptions(id), amount_xof bigint NOT NULL CHECK(amount_xof>0), method text NOT NULL, provider_reference text UNIQUE, status text NOT NULL CHECK(status IN ('pending','confirmed','failed','refunded')), created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE device_licenses (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), establishment_id uuid NOT NULL REFERENCES establishments(id), device_fingerprint_hash text NOT NULL, status text NOT NULL DEFAULT 'active', last_seen_at timestamptz, UNIQUE(establishment_id,device_fingerprint_hash));
+CREATE TABLE products (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), establishment_id uuid NOT NULL REFERENCES establishments(id), name text NOT NULL, category text NOT NULL, unit_price_xof bigint NOT NULL CHECK(unit_price_xof>=0), active boolean NOT NULL DEFAULT true, version bigint NOT NULL DEFAULT 1, UNIQUE(id,establishment_id));
+CREATE TABLE dining_tables (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), establishment_id uuid NOT NULL REFERENCES establishments(id), label text NOT NULL, UNIQUE(establishment_id,label));
+CREATE TABLE orders (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), establishment_id uuid NOT NULL REFERENCES establishments(id), order_number text NOT NULL, table_id uuid REFERENCES dining_tables(id), server_id uuid REFERENCES app_users(id), status text NOT NULL DEFAULT 'open' CHECK(status IN ('open','closed','cancelled')), preparation_status text NOT NULL DEFAULT 'new' CHECK(preparation_status IN ('new','accepted','preparing','ready','served')), created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(establishment_id,order_number), UNIQUE(id,establishment_id));
+CREATE TABLE order_items (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), establishment_id uuid NOT NULL, order_id uuid NOT NULL, product_id uuid NOT NULL, product_name_snapshot text NOT NULL, unit_price_xof bigint NOT NULL CHECK(unit_price_xof>=0), quantity integer NOT NULL CHECK(quantity>0), FOREIGN KEY(order_id,establishment_id) REFERENCES orders(id,establishment_id), FOREIGN KEY(product_id,establishment_id) REFERENCES products(id,establishment_id));
+CREATE TABLE payments (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), establishment_id uuid NOT NULL, order_id uuid NOT NULL, amount_xof bigint NOT NULL CHECK(amount_xof>0), method text NOT NULL CHECK(method IN ('cash','mobile_money','card','credit')), idempotency_key text NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(establishment_id,idempotency_key), FOREIGN KEY(order_id,establishment_id) REFERENCES orders(id,establishment_id));
+CREATE TABLE customer_credits (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), establishment_id uuid NOT NULL REFERENCES establishments(id), code_hash text NOT NULL UNIQUE, initial_amount_xof bigint NOT NULL CHECK(initial_amount_xof>0), balance_xof bigint NOT NULL CHECK(balance_xof>=0), status text NOT NULL DEFAULT 'active' CHECK(status IN ('active','exhausted','cancelled')), CHECK(balance_xof<=initial_amount_xof));
+CREATE TABLE credit_movements (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), credit_id uuid NOT NULL REFERENCES customer_credits(id), kind text NOT NULL CHECK(kind IN ('issue','redeem','refund','reverse')), amount_xof bigint NOT NULL CHECK(amount_xof>0), idempotency_key text NOT NULL UNIQUE, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE stock_movements (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), establishment_id uuid NOT NULL REFERENCES establishments(id), product_id uuid NOT NULL, quantity_delta integer NOT NULL CHECK(quantity_delta<>0), reason text NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), FOREIGN KEY(product_id,establishment_id) REFERENCES products(id,establishment_id));
+CREATE TABLE audit_logs (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id uuid NOT NULL REFERENCES tenants(id), actor_id uuid, action text NOT NULL, object_type text NOT NULL, object_id uuid, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE sync_events (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), establishment_id uuid NOT NULL REFERENCES establishments(id), sequence_no bigint NOT NULL, event_type text NOT NULL, payload jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(establishment_id,sequence_no));
+CREATE INDEX idx_orders_est_date ON orders(establishment_id,created_at DESC);
+CREATE INDEX idx_payments_order ON payments(order_id);
+CREATE INDEX idx_events_est_seq ON sync_events(establishment_id,sequence_no);
+-- Supabase security: deny client-side direct access by default; expose only via authenticated server API.
+ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE establishments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE app_users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_assignments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE subscription_plans ENABLE ROW LEVEL SECURITY;
+ALTER TABLE subscriptions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE subscription_payments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE device_licenses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE products ENABLE ROW LEVEL SECURITY;
+ALTER TABLE dining_tables ENABLE ROW LEVEL SECURITY;
+ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE order_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE payments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE customer_credits ENABLE ROW LEVEL SECURITY;
+ALTER TABLE credit_movements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE stock_movements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sync_events ENABLE ROW LEVEL SECURITY;
+-- No direct client policies are granted: use trusted API with server-side authorization and tenant scoping.
