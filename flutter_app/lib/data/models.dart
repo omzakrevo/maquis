@@ -533,3 +533,98 @@ class ProfitReport {
   double? get rate => revenueWithCost == 0 ? null : profit * 100 / revenueWithCost;
   int get unitsWithoutCost => products.fold(0, (a, p) => a + p.quantityWithoutCost);
 }
+
+/// Article saisi dans l'écran « Ajout multiple » (ou scanné à la chaîne).
+class NewProductInput {
+  NewProductInput({required this.name, required this.category, required this.price, this.cost, this.stock = 0, this.barcode, this.alertQty = 0});
+  final String name;
+  final String category;
+  final int price;
+  final int? cost;
+  final int stock;
+  final String? barcode;
+  final int alertQty;
+}
+
+/// Chiffres d'une journée (ou d'une heure) du rapport de ventes.
+class PeriodStat {
+  PeriodStat(this.label, {this.orders = 0, this.items = 0, this.revenue = 0, this.cost = 0, this.revenueWithCost = 0});
+  final String label;
+  int orders;
+  int items;
+  int revenue;
+  int cost;
+  int revenueWithCost;
+  int get profit => revenueWithCost - cost;
+}
+
+class GroupStat {
+  GroupStat(this.name, {this.orders = 0, this.items = 0, this.revenue = 0});
+  final String name;
+  int orders;
+  int items;
+  int revenue;
+}
+
+class LowStockItem {
+  LowStockItem(this.name, this.qty, this.alert);
+  final String name;
+  final int qty;
+  final int alert;
+}
+
+/// Rapport détaillé des ventes sur [from, to[ pour l'établissement en cours.
+class SalesReport {
+  SalesReport({
+    required this.from,
+    required this.to,
+    required this.business,
+    required this.orders,
+    required this.items,
+    required this.revenue,
+    required this.collected,
+    required this.cancelledCount,
+    required this.cancelledTotal,
+    required this.openCount,
+    required this.byMethod,
+    required this.days,
+    required this.hours,
+    required this.products,
+    required this.categories,
+    required this.employees,
+    required this.lowStock,
+    required this.stockValueCost,
+    required this.stockValueSale,
+  });
+  final DateTime from;
+  final DateTime to;
+  final BusinessMode business;
+  final int orders;
+  final int items;
+  final int revenue;
+  final int collected;
+  final int cancelledCount;
+  final int cancelledTotal;
+  final int openCount;
+  final Map<String, int> byMethod;
+  final List<PeriodStat> days;
+  final List<PeriodStat> hours;
+  final List<ProductProfit> products;
+  final List<GroupStat> categories;
+  final List<GroupStat> employees;
+  final List<LowStockItem> lowStock;
+  final int stockValueCost;
+  final int stockValueSale;
+
+  int get unpaid => revenue - collected;
+  int get averageBasket => orders == 0 ? 0 : (revenue / orders).round();
+  int get cost => products.fold(0, (a, p) => a + p.cost);
+  int get revenueWithCost => products.fold(0, (a, p) => a + p.revenueWithCost);
+  int get profit => revenueWithCost - cost;
+  double? get marginRate => revenueWithCost == 0 ? null : profit * 100 / revenueWithCost;
+  bool get hasCost => revenueWithCost > 0;
+  int get unitsWithoutCost => products.fold(0, (a, p) => a + p.quantityWithoutCost);
+  int get activeDays => days.where((d) => d.orders > 0).length;
+  PeriodStat? get bestDay => days.where((d) => d.revenue > 0).fold<PeriodStat?>(null, (b, d) => b == null || d.revenue > b.revenue ? d : b);
+  PeriodStat? get bestHour => hours.where((d) => d.revenue > 0).fold<PeriodStat?>(null, (b, d) => b == null || d.revenue > b.revenue ? d : b);
+}

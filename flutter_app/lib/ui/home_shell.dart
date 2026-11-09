@@ -9,7 +9,9 @@ import 'login_screen.dart';
 import 'manage/about_screen.dart';
 import 'manage/history_screens.dart';
 import 'manage/products_screen.dart';
+import 'manage/data_screen.dart';
 import 'manage/profit_screen.dart';
+import 'manage/reports_screen.dart';
 import 'manage/server_sales_screen.dart';
 import 'manage/settings_screen.dart';
 import 'manage/stock_history_screen.dart';
@@ -201,6 +203,7 @@ class ManageScreen extends StatelessWidget {
     void open(Widget w) => Navigator.push(context, MaterialPageRoute(builder: (_) => w));
     final direct = AppColors.mode.directSale;
     final tiles = <(Permission?, IconData, Color, String, String, Widget Function())>[
+      (Permission.viewReports, Icons.insights, const Color(0xFF1971C2), 'Rapports', 'Jour, mois, période · PDF, Excel, ticket', () => const ReportsScreen()),
       Brand.pharmacy
           ? (Permission.manageCatalog, Icons.medication, const Color(0xFFD9480F), 'Médicaments et prix', 'Prix de vente et d\'achat, code-barres', () => const ProductsScreen())
           : (
@@ -220,6 +223,7 @@ class ManageScreen extends StatelessWidget {
           : (Permission.viewReports, Icons.groups_2, const Color(0xFFE67700), 'Ventes par serveuse', 'Bouteilles, chiffre d\'affaires, primes du mois', () => const ServerSalesScreen()),
       (Permission.viewReports, Icons.trending_up, const Color(0xFF2F9E44), 'Marges et bénéfices', 'Prix d\'achat, bénéfice, valeur du stock', () => const ProfitScreen()),
       (Permission.viewReports, Icons.receipt_long, const Color(0xFFE67700), 'Historique des commandes', 'Réimpression des reçus', () => const OrdersHistoryScreen()),
+      (Permission.manageCatalog, Icons.dataset_outlined, const Color(0xFF5F3DC4), 'Exemples et remise à zéro', 'Charger ou supprimer les articles de test, tout effacer', () => const DataScreen()),
       (Permission.manageSettings, Icons.print, const Color(0xFF7A1A0C), 'Paramètres et imprimante', 'Établissement, réseau ou Bluetooth', () => const SettingsScreen()),
       (Permission.viewAudit, Icons.manage_search, const Color(0xFF495057), 'Journal d\'activité', 'Qui a fait quoi, quand', () => const AuditScreen()),
       (null, Icons.info, const Color(0xFFF59F00), 'À propos', 'Version, crédits des photos', () => const AboutScreen()),

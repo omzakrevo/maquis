@@ -8,6 +8,7 @@ import '../../data/models.dart';
 import '../common.dart';
 import '../photo_picker.dart';
 import '../scan_screen.dart';
+import 'bulk_add_screen.dart';
 import 'product_io_ui.dart';
 import '../theme.dart';
 
@@ -41,16 +42,38 @@ class _ProductsScreenState extends State<ProductsScreen> {
     });
   }
 
-  Future<void> _edit([Product? p]) async {
+  /// Scanner le code d'un article : s'il existe on l'ouvre, sinon fiche nouvelle pré-remplie.
+  Future<void> _scanAdd() async {
+    final v = await scanCode(context, title: 'Scanner le code-barres ou le QR de l\'article');
+    if (v == null || !mounted) return;
+    var code = v.trim();
+    if (code.toUpperCase().startsWith('PRD:')) code = code.substring(4);
+    code = code.replaceAll(RegExp(r'[\s\u0000-\u001f]'), '');
+    if (code.isEmpty) return;
+    final known = products.where((p) => p.barcode == code).firstOrNull;
+    if (known != null) {
+      toast(context, 'Déjà enregistré : ${known.name}');
+      await _edit(known);
+    } else {
+      await _edit(null, code);
+    }
+  }
+
+  Future<void> _bulkAdd() async {
+    final n = await Navigator.push<int>(context, MaterialPageRoute(builder: (_) => BulkAddScreen(existing: products)));
+    if (n != null) await _load();
+  }
+
+  Future<void> _edit([Product? p, String? scannedCode]) async {
     final scope = AppScope.read(context);
     final cats = products.map((x) => x.category).toSet().toList()..sort();
     final name = TextEditingController(text: p?.name);
     final category = TextEditingController(text: p?.category ?? (cats.isEmpty ? '' : cats.first));
     final price = TextEditingController(text: p == null ? '' : '${p.price}');
     final alert = TextEditingController(text: '${p?.alertQty ?? 0}');
-    final barcode = TextEditingController(text: p?.barcode ?? '');
+    final barcode = TextEditingController(text: p?.barcode ?? scannedCode ?? '');
     final cost = TextEditingController(text: p?.cost == null ? '' : '${p!.cost}');
-    var track = p?.trackStock ?? false;
+    var track = p?.trackStock ?? mode.directSale;
     var station = p?.station ?? Station.bar;
     var active = p?.active ?? true;
     String? image = p?.image;
@@ -316,6 +339,19 @@ class _ProductsScreenState extends State<ProductsScreen> {
             : ListView(
                 padding: const EdgeInsets.fromLTRB(12, 0, 12, 96),
                 children: [
+                  Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        FilledButton.tonalIcon(key: const ValueKey('scan-add'), onPressed: _scanAdd, icon: const Icon(Icons.qr_code_scanner), label: const Text('Scanner un article')),
+                        FilledButton.tonalIcon(key: const ValueKey('bulk-add'), onPressed: _bulkAdd, icon: const Icon(Icons.playlist_add), label: const Text('Ajout multiple')),
+                      ],
+                    ),
+                  ),
+                  if (list.isEmpty)
+                    const EmptyState(Icons.inventory_2_outlined, 'Aucun article. Scannez, ajoutez-en plusieurs d\'un coup, importez un fichier Excel ou chargez les exemples (Gestion > Exemples).'),
                   for (final p in list) ...[
                     if (p.category != lastCat) _categoryHeader(lastCat = p.category),
                     Card(
@@ -339,12 +375,11 @@ class _ProductsScreenState extends State<ProductsScreen> {
                         ),
                         subtitle: Row(
                           children: [
-                            Icon(p.station == Station.kitchen ? Icons.soup_kitchen : Icons.local_bar, size: 15, color: stationColor(p.station)),
-                            const SizedBox(width: 4),
+                            if (!mode.directSale) ...[Icon(p.station == Station.kitchen ? Icons.soup_kitchen : Icons.local_bar, size: 15, color: stationColor(p.station)), const SizedBox(width: 4)],
                             Flexible(
                               child: Text(
                                 [
-                                  p.station.label,
+                                  if (!mode.directSale) p.station.label,
                                   if (p.trackStock) 'stock ${p.stockQty}',
                                   if (p.cost != null) 'achat ${fcfa(p.cost!)} · marge ${p.marginRate!.toStringAsFixed(0)} %',
                                   if (p.barcode != null) '▮ ${p.barcode}',

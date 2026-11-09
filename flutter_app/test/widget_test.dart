@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maquis_resto_pro/app.dart';
 import 'package:maquis_resto_pro/data/database.dart';
+import 'package:maquis_resto_pro/data/models.dart';
 import 'package:maquis_resto_pro/data/pos_repository.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -117,9 +118,9 @@ void main() {
       repo = PosRepository(await openPosDatabase(databaseFactoryFfi, inMemoryDatabasePath));
       final owner = (await repo.users()).first;
       await repo.saveSettings(owner, {'business_mode': 'shop'});
-      final list = await repo.products();
-      final brakina = list.firstWhere((p) => p.name == 'Brakina');
-      await repo.saveProduct(owner, id: brakina.id, name: brakina.name, category: brakina.category, price: brakina.price, station: brakina.station, barcode: ' 6111234567890\n');
+      // Catalogue propre à la boutique (celui du maquis n'y apparaît pas).
+      expect(await repo.products(), isEmpty);
+      await repo.addProducts(owner, [NewProductInput(name: 'Brakina', category: 'Boissons', price: 800, cost: 600, stock: 24, barcode: ' 6111234567890\n')]);
       await repo.openSession(owner, 5000);
     });
     await tester.pumpWidget(PosApp(repo: repo));

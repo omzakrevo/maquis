@@ -89,19 +89,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return r == true;
   }
 
-  /// Nouveau type d'établissement : retirer les produits de démonstration
-  /// (boissons, plats) puis changer couleurs, logo et icône de l'application.
+  /// Nouveau type d'établissement : chaque type a son propre catalogue, son stock et ses ventes.
+  /// Catalogue vide → proposer les articles d'exemple ; puis couleurs, logo et nom changent.
   Future<void> _switchMode() async {
     final scope = AppScope.read(context);
-    final demo = await scope.repo.demoProductsActive();
-    if (mode.directSale && demo > 0 && mounted) {
-      final hide = await confirm(
+    if ((await scope.repo.products(includeInactive: true)).isEmpty && mounted) {
+      final what = switch (mode) {
+        BusinessMode.pharmacy => '18 médicaments et produits de soin avec photos',
+        BusinessMode.shop => '18 pièces détachées de moto',
+        BusinessMode.restaurant => '12 boissons et plats avec photos',
+      };
+      final load = await confirm(
         context,
-        'Produits de démonstration',
-        'Les $demo produits livrés en exemple (bières, sodas, plats…) ne concernent pas ${mode == BusinessMode.pharmacy ? 'une pharmacie' : 'une boutique'}. Les retirer de la vente ?\n\nIls ne sont pas supprimés : vous pouvez les remettre en vente dans Gestion > Produits.',
-        ok: 'Retirer',
+        'Catalogue ${mode == BusinessMode.pharmacy
+            ? 'de la pharmacie'
+            : mode == BusinessMode.shop
+            ? 'de la boutique'
+            : 'du maquis'} vide',
+        'Ce type d\'établissement a son propre catalogue, son stock et ses ventes.\n\nCharger des articles d\'exemple pour essayer ($what, prix d\'achat et de vente, stock) ?\n\nVous pourrez les supprimer en un geste dans Gestion > Exemples et remise à zéro.',
+        ok: 'Charger les exemples',
       );
-      if (hide && mounted) await guard(context, () => scope.repo.hideDemoProducts(scope.user), success: 'Produits de démonstration retirés');
+      if (load && mounted) await guard(context, () => scope.repo.loadDemoCatalog(scope.user), success: 'Articles d\'exemple chargés');
     }
     AppColors.apply(mode); // l'application se redessine (couleurs, logo, nom)
   }

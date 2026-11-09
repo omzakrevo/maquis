@@ -1,5 +1,16 @@
 # Journal des versions
 
+## V0.9.0 — 09/11/2026 — rapports, ajout par scan, établissements séparés
+
+- **Rapports détaillés** (Gestion > Rapports) : aujourd'hui, hier, un jour au choix, semaine, mois en cours, mois dernier, un mois au choix, période libre. Nombre de ventes, articles, chiffre d'affaires, encaissé, reste à encaisser, panier moyen, annulations, bénéfice et marge ; graphiques jour par jour et heure par heure ; détail par jour, par article (part du CA, bénéfice), par catégorie, par vendeur/serveuse ; mode de paiement ; valeur du stock et articles à recommander.
+- Exports du rapport : **PDF** A4 (en-tête aux couleurs de l'établissement, chiffres clés, graphiques, tableaux), **Excel** (7 feuilles : Résumé, Par jour, Par heure, Articles, Catégories, Vendeurs, Stock bas) et **ticket** sur l'imprimante thermique.
+- **Enregistrement des articles par scan** : « Scanner un article » ouvre la fiche existante ou une nouvelle fiche avec le code-barres rempli.
+- **Ajout multiple** : on scanne à la chaîne (douchette, lecteur intégré, caméra) ; chaque code crée une ligne, le même code deux fois ajoute 1 au stock ; nom, catégorie, prix de vente, prix d'achat, stock ; tout est enregistré en une fois (tout ou rien), le stock de départ est tracé avec son prix d'achat.
+- **Établissements vraiment séparés** : maquis, boutique et pharmacie ont chacun leur catalogue, leur stock, leurs ventes et leurs rapports ; un même code-barres peut exister dans deux établissements (migration v7 ; les données existantes sont rattachées au type en cours).
+- **Articles d'exemple** avec photos générées, prix d'achat et de vente, codes-barres et stock : 18 médicaments et produits de soin pour la pharmacie, 18 pièces détachées de moto pour la boutique (9 avec photo), 12 boissons et plats pour le maquis. Proposés automatiquement quand on passe à un établissement vide.
+- Gestion > **Exemples et remise à zéro** : charger / supprimer les exemples (un exemple déjà vendu est seulement retiré de la vente), **Tout effacer** pour l'établissement en cours (propriétaire uniquement, confirmation « EFFACER ») ; les autres établissements, employés, réglages et avoirs clients sont conservés.
+- En boutique et pharmacie, la mention « Bar / Cuisine » disparaît de la liste des produits ; nouvelles icônes de catégories (pièces moto, antiseptiques…).
+
 ## V0.8.0 — 01/11/2026 — l'application devient CAISSE PRO
 
 - Nouveau nom général **CAISSE PRO** (maquis, restaurants, boutiques, pharmacies) et nouveau logo (ticket de caisse validé) ; icône d'application unique sur Android et Windows (`caisse_pro.exe`).

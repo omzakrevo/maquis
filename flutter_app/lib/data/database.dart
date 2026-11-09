@@ -6,14 +6,14 @@ import 'package:uuid/uuid.dart';
 
 import '../core/security.dart';
 
-const schemaVersion = 6;
+const schemaVersion = 7;
 const _uuid = Uuid();
 
 typedef Migration = Future<void> Function(DatabaseExecutor d);
 
 /// Migrations successives. On n'en modifie jamais une déjà publiée :
 /// on en ajoute une nouvelle à la fin.
-final List<Migration> migrations = [_v1, _v2, _v3, _v4, _v5, _v6];
+final List<Migration> migrations = [_v1, _v2, _v3, _v4, _v5, _v6, _v7];
 
 Future<Database> openPosDatabase(DatabaseFactory factory, String path) {
   return factory.openDatabase(
@@ -223,4 +223,23 @@ Future<void> _v5(DatabaseExecutor d) async {
 /// l'établissement n'apparaît plus sur les tickets.
 Future<void> _v6(DatabaseExecutor d) async {
   await d.rawUpdate("UPDATE settings SET value='Mon établissement' WHERE key='shop_name' AND value='MAQUIS & RESTO PRO'");
+}
+
+/// V7 : catalogue, stock et ventes séparés par type d'établissement
+/// (restaurant, shop, pharmacy) ; marquage des produits de démonstration.
+Future<void> _v7(DatabaseExecutor d) async {
+  final mode = (await d.rawQuery("SELECT value FROM settings WHERE key='business_mode'")).firstOrNull?['value'] as String? ?? 'restaurant';
+  await d.execute("ALTER TABLE products ADD COLUMN business TEXT NOT NULL DEFAULT 'restaurant'");
+  await d.execute('ALTER TABLE products ADD COLUMN demo INTEGER NOT NULL DEFAULT 0');
+  await d.execute("ALTER TABLE orders ADD COLUMN business TEXT NOT NULL DEFAULT 'restaurant'");
+  // Les produits livrés avec l'application (photos de boissons et plats) sont des exemples de maquis ;
+  // le reste appartient au type d'établissement en cours.
+  await d.rawUpdate("UPDATE products SET demo=1, business='restaurant' WHERE image LIKE 'asset:assets/products/%'");
+  await d.rawUpdate("UPDATE products SET business=? WHERE demo=0", [mode]);
+  await d.rawUpdate("UPDATE orders SET business=?", [mode]);
+  await d.execute('CREATE INDEX idx_products_business ON products(business, active)');
+  await d.execute('CREATE INDEX idx_orders_business ON orders(business, created_at)');
+  // Un même code-barres peut exister dans deux établissements différents.
+  await d.execute('DROP INDEX IF EXISTS idx_products_barcode');
+  await d.execute("CREATE UNIQUE INDEX idx_products_barcode ON products(business, barcode) WHERE barcode IS NOT NULL AND barcode<>''");
 }

@@ -196,6 +196,22 @@ class CategoryStyle {
     'hygiène': CategoryStyle(Color(0xFF1098AD), Icons.soap_outlined),
     'bébé': CategoryStyle(Color(0xFFE64980), Icons.child_care),
     'matériel médical': CategoryStyle(Color(0xFF495057), Icons.medical_services_outlined),
+    'anti-inflammatoires': CategoryStyle(Color(0xFFE8590C), Icons.medication),
+    'digestif': CategoryStyle(Color(0xFF5C940D), Icons.medication),
+    'réhydratation': CategoryStyle(Color(0xFF1C7ED6), Icons.water_drop_outlined),
+    'antiseptiques': CategoryStyle(Color(0xFF7048E8), Icons.sanitizer_outlined),
+    // pièces détachées moto
+    'allumage': CategoryStyle(Color(0xFFF08C00), Icons.bolt),
+    'transmission': CategoryStyle(Color(0xFF495057), Icons.settings),
+    'freinage': CategoryStyle(Color(0xFFC92A2A), Icons.do_not_disturb_on_outlined),
+    'câbles': CategoryStyle(Color(0xFF343A40), Icons.cable),
+    'filtres': CategoryStyle(Color(0xFF5C940D), Icons.filter_alt_outlined),
+    'huiles': CategoryStyle(Color(0xFFE67700), Icons.oil_barrel_outlined),
+    'électricité': CategoryStyle(Color(0xFF1971C2), Icons.battery_charging_full),
+    'pneus': CategoryStyle(Color(0xFF212529), Icons.tire_repair),
+    'roues': CategoryStyle(Color(0xFF495057), Icons.album_outlined),
+    'moteur': CategoryStyle(Color(0xFF862E9C), Icons.two_wheeler),
+    'accessoires': CategoryStyle(Color(0xFF0B7285), Icons.build_outlined),
   };
   static const _palette = [Color(0xFF0B7285), Color(0xFF5C940D), Color(0xFFC2255C), Color(0xFF364FC7), Color(0xFFE67700), Color(0xFF087F5B)];
 
@@ -204,7 +220,7 @@ class CategoryStyle {
     final known = _known[k] ?? _known[k.endsWith('s') ? k.substring(0, k.length - 1) : '${k}s'];
     if (known != null) return known;
     final h = k.codeUnits.fold<int>(7, (a, c) => (a * 31 + c) & 0x7fffffff);
-    return CategoryStyle(_palette[h % _palette.length], Brand.pharmacy ? Icons.medication_outlined : Icons.local_offer);
+    return CategoryStyle(_palette[h % _palette.length], Brand.pharmacy ? Icons.medication_outlined : (AppColors.mode == BusinessMode.shop ? Icons.inventory_2_outlined : Icons.local_offer));
   }
 }
 

@@ -14,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:maquis_resto_pro/app.dart';
 import 'package:maquis_resto_pro/core/permissions.dart';
 import 'package:maquis_resto_pro/data/database.dart';
+import 'package:maquis_resto_pro/data/demo_catalogs.dart';
 import 'package:maquis_resto_pro/data/models.dart';
 import 'package:maquis_resto_pro/data/pos_repository.dart';
 import 'package:maquis_resto_pro/ui/theme.dart';
@@ -177,10 +178,8 @@ void main() {
       repo = await seeded();
       final owner = (await repo.users()).firstWhere((u) => u.name == 'Zachari');
       await repo.saveSettings(owner, {'business_mode': 'shop', 'shop_name': 'Alimentation Wend-Kuuni'});
-      var n = 0;
-      for (final p in await repo.products()) {
-        await repo.saveProduct(owner, id: p.id, name: p.name, category: p.category, price: p.price, station: p.station, barcode: '61100000000${n++}');
-      }
+      // Boutique de pièces détachées moto : catalogue d'exemple avec codes-barres.
+      await repo.loadDemoCatalog(owner);
     });
     await tester.pumpWidget(
       RepaintBoundary(
@@ -199,7 +198,7 @@ void main() {
     await settle(tester, 600);
     expect(find.text('Vente'), findsWidgets);
     final field = find.byType(TextField).first;
-    for (final code in ['611000000000', '611000000000', '611000000003']) {
+    for (final code in [motoPartsDemo[0].barcode, motoPartsDemo[0].barcode, motoPartsDemo[2].barcode]) {
       await tester.enterText(field, code);
       await tester.testTextInput.receiveAction(TextInputAction.done);
       await tester.pump();
@@ -216,7 +215,7 @@ void main() {
     await shot(tester, 'shop_03_orange_money');
     await tester.tap(find.text('Espèces'));
     await tester.pump();
-    await tester.tap(find.text('5 000 F').last);
+    await tester.tap(find.text('5 000 F').last); // 2 bougies + plaquettes = 4 500 F
     await tester.pump();
     await shot(tester, 'shop_04_monnaie');
     await tester.tap(find.textContaining('Valider'));
@@ -237,9 +236,8 @@ void main() {
       repo = await seeded();
       final owner = (await repo.users()).firstWhere((u) => u.name == 'Zachari');
       await repo.saveSettings(owner, {'business_mode': 'pharmacy', 'shop_name': 'Pharmacie du Marché'});
-      expect(await repo.demoProductsActive(), 12);
-      expect(await repo.hideDemoProducts(owner), 12);
-      expect(await repo.demoProductsActive(), 0);
+      expect(await repo.products(), isEmpty); // catalogue propre à la pharmacie
+      expect(await repo.loadDemoCatalog(owner), 18);
       final meds = [
         ('Paracétamol 500 mg', 'Antalgiques', 500, 320),
         ('Amoxicilline 500 mg', 'Antibiotiques', 2500, 1800),
@@ -305,6 +303,122 @@ void main() {
     await tester.tap(find.text('Amoxicilline 500 mg').first);
     await settle(tester);
     await shot(tester, 'pharma_04_fiche');
+    AppColors.apply(BusinessMode.restaurant);
+    await tester.runAsync(() => repo.db.close());
+  });
+
+  testWidgets('petit écran : rapports, exemples, ajout multiple', (tester) async {
+    tester.view.physicalSize = const Size(360, 640) * 2;
+    tester.view.devicePixelRatio = 2;
+    addTearDown(tester.view.reset);
+    late PosRepository repo;
+    await tester.runAsync(() async {
+      await loadRealFonts();
+      repo = await seeded();
+      final owner = (await repo.users()).firstWhere((u) => u.name == 'Zachari');
+      await repo.saveSettings(owner, {'business_mode': 'pharmacy', 'shop_name': 'Pharmacie du Marché'});
+      await repo.loadDemoCatalog(owner);
+      final meds = await repo.products();
+      for (var i = 0; i < 9; i++) {
+        final id = await repo.createOrder(owner, tableLabel: 'Vente directe', lines: [CartLine(meds[(i * 7) % meds.length], 1 + i % 3), CartLine(meds[(i * 3) % meds.length], 1)]);
+        final d = await repo.orderDetail(id);
+        await repo.pay(owner, PaymentRequest(orderId: id, amount: d.summary.total, method: i % 3 == 0 ? 'mobile_money' : 'cash', reference: 'OM$i', idempotencyKey: 'r$i'));
+      }
+    });
+    await tester.pumpWidget(
+      RepaintBoundary(
+        key: boundary,
+        child: PosApp(repo: repo),
+      ),
+    );
+    await settle(tester);
+    await tester.tap(find.textContaining('Zachari'));
+    await tester.pump();
+    for (final d in '2580'.split('')) {
+      await tester.tap(find.widgetWithText(FilledButton, d).first);
+      await tester.pump();
+    }
+    await tester.tap(find.byIcon(Icons.login));
+    await settle(tester, 600);
+    await shot(tester, 'rep_00_vente_photos');
+    await tester.tap(find.text('Gestion').last);
+    await settle(tester);
+    await shot(tester, 'rep_01_gestion');
+    await tester.tap(find.text('Rapports'));
+    await settle(tester, 600);
+    expect(find.text('Nombre de ventes'), findsOneWidget);
+    expect(find.text('9'), findsWidgets);
+    await shot(tester, 'rep_02_jour');
+    await tester.drag(find.byType(ListView).last, const Offset(0, -520));
+    await settle(tester);
+    await shot(tester, 'rep_03_jour_suite');
+    await tester.drag(find.byType(ListView).last, const Offset(0, 2000));
+    await settle(tester);
+    await tester.tap(find.byKey(const ValueKey('period-month')));
+    await settle(tester, 600);
+    await shot(tester, 'rep_04_mois');
+    await tester.drag(find.byType(ListView).last, const Offset(0, -420));
+    await settle(tester);
+    await shot(tester, 'rep_05_mois_graphique');
+    await tester.drag(find.byType(ListView).last, const Offset(0, 2000));
+    await settle(tester);
+    await tester.tap(find.byIcon(Icons.print));
+    await settle(tester);
+    expect(find.textContaining('RAPPORT DES VENTES'), findsOneWidget);
+    await shot(tester, 'rep_06_ticket');
+    await tester.tap(find.text('Fermer'));
+    await settle(tester);
+    await tester.pageBack();
+    await settle(tester);
+    // Exemples et remise à zéro
+    await tester.scrollUntilVisible(
+      find.text('Exemples et remise à zéro'),
+      150,
+      scrollable: find.descendant(of: find.byType(GridView), matching: find.byType(Scrollable)),
+    );
+    await tester.pump();
+    await tester.tap(find.text('Exemples et remise à zéro'));
+    await settle(tester);
+    expect(find.textContaining('18 articles'), findsOneWidget);
+    await shot(tester, 'rep_07_exemples');
+    await tester.pageBack();
+    await settle(tester);
+    await tester.scrollUntilVisible(
+      find.text('Médicaments et prix'),
+      -150,
+      scrollable: find.descendant(of: find.byType(GridView), matching: find.byType(Scrollable)),
+    );
+    await tester.pump();
+    await tester.tap(find.text('Médicaments et prix'));
+    await settle(tester);
+    await shot(tester, 'rep_08_medicaments');
+    await tester.tap(find.byKey(const ValueKey('bulk-add')));
+    await settle(tester);
+    final input = find.byKey(const ValueKey('bulk-scan-input'));
+    for (final code in ['3400936400123', '3400936400123', '3400930000017']) {
+      await tester.enterText(input, code);
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pump();
+    }
+    await settle(tester);
+    expect(find.textContaining('stock porté à 2'), findsNothing); // message suivant affiché
+    await tester.enterText(find.widgetWithText(TextField, 'Nom de l\'article').at(0), 'Doliprane 1000 mg');
+    await tester.enterText(find.widgetWithText(TextField, 'Prix vente').at(0), '1200');
+    await tester.enterText(find.widgetWithText(TextField, 'Prix achat').at(0), '850');
+    await tester.enterText(find.widgetWithText(TextField, 'Nom de l\'article').at(1), 'Efferalgan 500 mg');
+    await tester.enterText(find.widgetWithText(TextField, 'Prix vente').at(1), '900');
+    await tester.pump();
+    await shot(tester, 'rep_09_ajout_multiple');
+    await tester.tap(find.byKey(const ValueKey('bulk-save')));
+    await settle(tester, 600);
+    await tester.runAsync(() async {
+      final d = (await repo.productByBarcode('3400936400123'))!;
+      expect(d.name, 'Doliprane 1000 mg');
+      expect(d.stockQty, 2);
+      expect(d.cost, 850);
+      expect((await repo.products()).length, 20);
+    });
+    await shot(tester, 'rep_10_apres_ajout');
     AppColors.apply(BusinessMode.restaurant);
     await tester.runAsync(() => repo.db.close());
   });

@@ -11,6 +11,7 @@ import 'package:uuid/uuid.dart';
 import '../core/permissions.dart';
 import '../core/security.dart';
 import 'database.dart';
+import 'demo_catalogs.dart';
 import 'models.dart';
 import 'product_io.dart';
 
@@ -154,9 +155,16 @@ class PosRepository {
 
   Future<AppUser> reloadUser(String id) async => AppUser.fromMap((await db.query('users', where: 'id=?', whereArgs: [id])).first);
 
+  // --------------------------------------------------------------- établissement
+  String? _bizCache;
+
+  /// Type d'établissement en cours : chaque type a son propre catalogue, son stock et ses ventes.
+  Future<String> business() async => _bizCache ??= BusinessMode.parse((await settings())['business_mode']).name;
+
   // --------------------------------------------------------------- catalogue
   Future<List<Product>> products({bool includeInactive = false}) async {
-    final rows = await db.query('products', where: includeInactive ? null : 'active=1', orderBy: 'category COLLATE NOCASE, name COLLATE NOCASE');
+    final b = await business();
+    final rows = await db.query('products', where: includeInactive ? 'business=?' : 'business=? AND active=1', whereArgs: [b], orderBy: 'category COLLATE NOCASE, name COLLATE NOCASE');
     return rows.map(Product.fromMap).toList();
   }
 
@@ -166,7 +174,7 @@ class PosRepository {
     if (code.toUpperCase().startsWith('PRD:')) code = code.substring(4);
     final c = normalizeBarcode(code);
     if (c == null) return null;
-    final r = await db.query('products', where: 'barcode=? AND active=1', whereArgs: [c], limit: 1);
+    final r = await db.query('products', where: 'barcode=? AND active=1 AND business=?', whereArgs: [c, await business()], limit: 1);
     return r.isEmpty ? null : Product.fromMap(r.first);
   }
 
@@ -178,9 +186,9 @@ class PosRepository {
         SUM(CASE WHEN i.cost_xof IS NULL THEN 0 ELSE i.quantity*i.cost_xof END) AS cost,
         SUM(CASE WHEN i.cost_xof IS NULL THEN i.quantity ELSE 0 END) AS qty_no_cost
       FROM order_items i JOIN orders o ON o.id=i.order_id
-      WHERE o.status<>'cancelled' AND o.created_at>=? AND o.created_at<?
+      WHERE o.status<>'cancelled' AND o.created_at>=? AND o.created_at<? AND o.business=?
       GROUP BY i.product_id, i.name_snapshot''',
-      [from.toUtc().toIso8601String(), to.toUtc().toIso8601String()],
+      [from.toUtc().toIso8601String(), to.toUtc().toIso8601String(), await business()],
     );
     final products =
         rows
@@ -196,21 +204,25 @@ class PosRepository {
             )
             .toList()
           ..sort((a, b) => b.profit.compareTo(a.profit));
-    final stock = await db.rawQuery('''SELECT COALESCE(SUM(CASE WHEN stock_qty>0 AND cost_xof IS NOT NULL THEN stock_qty*cost_xof ELSE 0 END),0) AS vc,
+    final stock = await db.rawQuery(
+      '''SELECT COALESCE(SUM(CASE WHEN stock_qty>0 AND cost_xof IS NOT NULL THEN stock_qty*cost_xof ELSE 0 END),0) AS vc,
         COALESCE(SUM(CASE WHEN stock_qty>0 THEN stock_qty*price_xof ELSE 0 END),0) AS vs
-      FROM products WHERE active=1 AND track_stock=1''');
-    final missing = await _scalar(db, 'SELECT COUNT(*) FROM products WHERE active=1 AND cost_xof IS NULL');
+      FROM products WHERE active=1 AND track_stock=1 AND business=?''',
+      [await business()],
+    );
+    final missing = await _scalar(db, 'SELECT COUNT(*) FROM products WHERE active=1 AND cost_xof IS NULL AND business=?', [await business()]);
     return ProfitReport(products: products, stockValueCost: _int(stock.first['vc']), stockValueSale: _int(stock.first['vs']), productsWithoutCost: missing);
   }
 
   /// Produits de démonstration encore en vente (boissons et plats livrés avec l'application).
-  Future<int> demoProductsActive() => _scalar(db, "SELECT COUNT(*) FROM products WHERE active=1 AND image LIKE 'asset:assets/products/%'");
+  Future<int> demoProductsActive() async => _scalar(db, 'SELECT COUNT(*) FROM products WHERE active=1 AND demo=1 AND business=?', [await business()]);
 
   /// Retire de la vente les produits de démonstration (sans les supprimer : historique conservé).
   Future<int> hideDemoProducts(AppUser actor) async {
     _require(actor, Permission.manageCatalog);
+    final biz = await business();
     return db.transaction((tx) async {
-      final n = await tx.rawUpdate("UPDATE products SET active=0, updated_at=? WHERE active=1 AND image LIKE 'asset:assets/products/%'", [nowUtc()]);
+      final n = await tx.rawUpdate('UPDATE products SET active=0, updated_at=? WHERE active=1 AND demo=1 AND business=?', [nowUtc(), biz]);
       await _audit(tx, actor, 'demo_products_hidden', 'product', null, {'count': n});
       return n;
     });
@@ -219,7 +231,7 @@ class PosRepository {
   Future<BusinessMode> businessMode() async => BusinessMode.parse((await settings())['business_mode']);
 
   Future<List<String>> categories() async {
-    final rows = await db.rawQuery('SELECT DISTINCT category FROM products WHERE active=1 ORDER BY category COLLATE NOCASE');
+    final rows = await db.rawQuery('SELECT DISTINCT category FROM products WHERE active=1 AND business=? ORDER BY category COLLATE NOCASE', [await business()]);
     return rows.map((r) => r['category'] as String).toList();
   }
 
@@ -247,6 +259,7 @@ class PosRepository {
     if (price < 0) throw BusinessError('Prix invalide');
     if (alertQty < 0) throw BusinessError('Seuil d\'alerte invalide');
     if (cost != null && cost < 0) throw BusinessError('Prix d\'achat invalide');
+    final biz = await business();
     final productId = id ?? _uuid.v4();
     final values = {
       'name': name.trim(),
@@ -263,11 +276,11 @@ class PosRepository {
     };
     await db.transaction((tx) async {
       if (code != null) {
-        final dup = await tx.query('products', columns: ['name'], where: 'barcode=? AND id<>?', whereArgs: [code, productId]);
+        final dup = await tx.query('products', columns: ['name'], where: 'barcode=? AND id<>? AND business=?', whereArgs: [code, productId, biz]);
         if (dup.isNotEmpty) throw BusinessError('Ce code-barres est déjà utilisé par « ${dup.first['name']} »');
       }
       if (id == null) {
-        await tx.insert('products', {'id': productId, ...values});
+        await tx.insert('products', {'id': productId, 'business': biz, ...values});
       } else {
         final n = await tx.update('products', values, where: 'id=?', whereArgs: [id]);
         if (n == 0) throw BusinessError('Produit introuvable');
@@ -283,8 +296,11 @@ class PosRepository {
   Future<ImportResult> importProducts(AppUser actor, List<ProductRow> rows) async {
     _require(actor, Permission.manageCatalog);
     if (rows.isEmpty) throw BusinessError('Aucune ligne à importer');
+    final biz = await business();
     return db.transaction((tx) async {
-      final existing = {for (final r in await tx.query('products')) (r['name'] as String).trim().toLowerCase(): Product.fromMap(r)};
+      final existing = {
+        for (final r in await tx.query('products', where: 'business=?', whereArgs: [biz])) (r['name'] as String).trim().toLowerCase(): Product.fromMap(r),
+      };
       var created = 0, updated = 0, stockAdjusted = 0;
       for (final row in rows) {
         final current = existing[row.name.trim().toLowerCase()];
@@ -306,7 +322,7 @@ class PosRepository {
           'updated_at': nowUtc(),
         };
         if (current == null) {
-          await tx.insert('products', {'id': id, ...values});
+          await tx.insert('products', {'id': id, 'business': biz, ...values});
           created++;
         } else {
           await tx.update('products', values, where: 'id=?', whereArgs: [id]);
@@ -324,6 +340,254 @@ class PosRepository {
       await _audit(tx, actor, 'products_import', 'product', null, {'created': created, 'updated': updated, 'stock_adjusted': stockAdjusted});
       return ImportResult(created: created, updated: updated, stockAdjusted: stockAdjusted);
     });
+  }
+
+  /// Ajout de plusieurs articles d'un coup (saisie en tableau ou scan à la chaîne),
+  /// en une transaction : tout est enregistré ou rien. Le stock initial devient une entrée tracée.
+  Future<int> addProducts(AppUser actor, List<NewProductInput> items) async {
+    _require(actor, Permission.manageCatalog);
+    if (items.isEmpty) throw BusinessError('Aucun article à enregistrer');
+    final biz = await business();
+    final seenCodes = <String>{};
+    final seenNames = <String>{};
+    for (final (i, it) in items.indexed) {
+      final n = i + 1;
+      if (it.name.trim().isEmpty) throw BusinessError('Ligne $n : nom obligatoire');
+      if (it.price < 0) throw BusinessError('Ligne $n : prix de vente invalide');
+      if ((it.cost ?? 0) < 0 || it.stock < 0 || it.alertQty < 0) throw BusinessError('Ligne $n : valeur négative');
+      if (!seenNames.add(it.name.trim().toLowerCase())) throw BusinessError('« ${it.name.trim()} » apparaît deux fois');
+      final c = normalizeBarcode(it.barcode);
+      if (c != null && !seenCodes.add(c)) throw BusinessError('Ligne $n : code-barres $c en double');
+    }
+    return db.transaction((tx) async {
+      for (final it in items) {
+        final code = normalizeBarcode(it.barcode);
+        final sameName = await tx.query('products', columns: ['id'], where: 'name=? COLLATE NOCASE AND business=? AND active=1', whereArgs: [it.name.trim(), biz]);
+        if (sameName.isNotEmpty) throw BusinessError('« ${it.name.trim()} » existe déjà dans le catalogue');
+        if (code != null) {
+          final dup = await tx.query('products', columns: ['name'], where: 'barcode=? AND business=?', whereArgs: [code, biz]);
+          if (dup.isNotEmpty) throw BusinessError('Le code-barres $code est déjà utilisé par « ${dup.first['name']} »');
+        }
+        final id = _uuid.v4();
+        final values = {
+          'name': it.name.trim(),
+          'category': it.category.trim().isEmpty ? 'Divers' : it.category.trim(),
+          'price_xof': it.price,
+          'track_stock': it.stock > 0 || it.alertQty > 0 ? 1 : 0,
+          'alert_qty': it.alertQty,
+          'station': 'bar',
+          'active': 1,
+          'barcode': code,
+          'cost_xof': it.cost,
+          'updated_at': nowUtc(),
+        };
+        await tx.insert('products', {'id': id, 'business': biz, ...values});
+        await _outbox(tx, 'product.upsert', {'id': id, ...values});
+        if (it.stock > 0) await _moveStock(tx, actor, id, it.stock, 'Livraison', null, note: 'Stock initial', unitCost: it.cost);
+      }
+      await _audit(tx, actor, 'products_batch_create', 'product', null, {'count': items.length});
+      return items.length;
+    });
+  }
+
+  /// Charge le catalogue d'exemple du type d'établissement en cours (médicaments, pièces moto,
+  /// boissons et plats) avec photos, prix d'achat/vente, codes-barres et stock de départ.
+  /// Les articles déjà présents sont simplement remis en vente.
+  Future<int> loadDemoCatalog(AppUser actor) async {
+    _require(actor, Permission.manageCatalog);
+    final biz = await business();
+    final items = demoCatalogFor(biz);
+    return db.transaction((tx) async {
+      var added = 0;
+      for (final it in items) {
+        final existing = await tx.query('products', columns: ['id'], where: 'name=? AND business=?', whereArgs: [it.name, biz]);
+        if (existing.isNotEmpty) {
+          await tx.update('products', {'active': 1, 'updated_at': nowUtc()}, where: 'id=?', whereArgs: [existing.first['id']]);
+          continue;
+        }
+        var code = normalizeBarcode(it.barcode);
+        if (code != null && (await tx.query('products', columns: ['id'], where: 'barcode=? AND business=?', whereArgs: [code, biz])).isNotEmpty) code = null;
+        final id = _uuid.v4();
+        await tx.insert('products', {
+          'id': id,
+          'business': biz,
+          'demo': 1,
+          'name': it.name,
+          'category': it.category,
+          'price_xof': it.price,
+          'cost_xof': it.cost,
+          'track_stock': it.stock > 0 ? 1 : 0,
+          'alert_qty': it.stock > 0 ? (it.stock ~/ 5).clamp(2, 20) : 0,
+          'station': biz == 'restaurant' && it.category == 'Plats' ? 'kitchen' : 'bar',
+          'image': it.image,
+          'barcode': code,
+          'active': 1,
+          'updated_at': nowUtc(),
+        });
+        if (it.stock > 0) await _moveStock(tx, actor, id, it.stock, 'Livraison', null, note: 'Exemple', unitCost: it.cost);
+        added++;
+      }
+      await _audit(tx, actor, 'demo_catalog_load', 'product', null, {'business': biz, 'added': added});
+      return added;
+    });
+  }
+
+  /// Supprime les articles d'exemple de l'établissement en cours. Ceux qui figurent déjà
+  /// sur une vente sont seulement retirés de la vente (l'historique reste juste).
+  Future<(int, int)> deleteDemoProducts(AppUser actor) async {
+    _require(actor, Permission.manageCatalog);
+    final biz = await business();
+    return db.transaction((tx) async {
+      final hidden = await tx.rawUpdate('UPDATE products SET active=0, updated_at=? WHERE demo=1 AND business=? AND active=1 AND id IN (SELECT product_id FROM order_items)', [nowUtc(), biz]);
+      const free = 'demo=1 AND business=? AND id NOT IN (SELECT product_id FROM order_items)';
+      await tx.rawDelete('DELETE FROM stock_movements WHERE product_id IN (SELECT id FROM products WHERE $free)', [biz]);
+      final deleted = await tx.rawDelete('DELETE FROM products WHERE $free', [biz]);
+      await _audit(tx, actor, 'demo_products_delete', 'product', null, {'business': biz, 'deleted': deleted, 'hidden': hidden});
+      return (deleted, hidden);
+    });
+  }
+
+  /// Efface TOUT ce qui appartient à l'établissement en cours (articles, stock, ventes,
+  /// paiements) pour repartir de zéro. Réservé au propriétaire ; les autres types
+  /// d'établissement, les utilisateurs et les réglages ne sont pas touchés.
+  Future<int> resetBusinessData(AppUser actor) async {
+    if (actor.role != Role.owner) throw PermissionDenied('Seul le propriétaire peut tout effacer');
+    final biz = await business();
+    return db.transaction((tx) async {
+      const orders = 'SELECT id FROM orders WHERE business=?';
+      const products = 'SELECT id FROM products WHERE business=?';
+      final n = await _scalar(tx, 'SELECT COUNT(*) FROM products WHERE business=?', [biz]);
+      final o = await _scalar(tx, 'SELECT COUNT(*) FROM orders WHERE business=?', [biz]);
+      await tx.rawUpdate('UPDATE credits SET source_order_id=NULL WHERE source_order_id IN ($orders)', [biz]);
+      await tx.rawUpdate('UPDATE credit_movements SET order_id=NULL WHERE order_id IN ($orders)', [biz]);
+      await tx.rawDelete('DELETE FROM payments WHERE order_id IN ($orders)', [biz]);
+      await tx.rawDelete('DELETE FROM stock_movements WHERE product_id IN ($products) OR order_id IN ($orders)', [biz, biz]);
+      await tx.rawDelete('DELETE FROM order_items WHERE order_id IN ($orders) OR product_id IN ($products)', [biz, biz]);
+      await tx.rawDelete('DELETE FROM orders WHERE business=?', [biz]);
+      await tx.rawDelete('DELETE FROM products WHERE business=?', [biz]);
+      await _audit(tx, actor, 'business_reset', 'business', biz, {'products': n, 'orders': o});
+      await _outbox(tx, 'business.reset', {'business': biz});
+      return n;
+    });
+  }
+
+  // ----------------------------------------------------------------- rapports
+  /// Rapport détaillé des ventes sur [from, to[ (heure locale) pour l'établissement en cours :
+  /// chiffres clés, jour par jour, heure par heure, articles, catégories, employés, stock.
+  Future<SalesReport> salesReport(AppUser actor, DateTime from, DateTime to) async {
+    _require(actor, Permission.viewReports);
+    final biz = await business();
+    final f = from.toUtc().toIso8601String();
+    final t = to.toUtc().toIso8601String();
+    final orderRows = await db.rawQuery(
+      '''SELECT o.id, o.created_at, o.status,
+        COALESCE((SELECT SUM(i.quantity*i.price_xof) FROM order_items i WHERE i.order_id=o.id),0) AS total,
+        COALESCE((SELECT SUM(i.quantity) FROM order_items i WHERE i.order_id=o.id),0) AS qty,
+        COALESCE((SELECT SUM(i.quantity*i.cost_xof) FROM order_items i WHERE i.order_id=o.id AND i.cost_xof IS NOT NULL),0) AS cost,
+        COALESCE((SELECT SUM(i.quantity*i.price_xof) FROM order_items i WHERE i.order_id=o.id AND i.cost_xof IS NOT NULL),0) AS rev_cost,
+        COALESCE((SELECT SUM(p.amount_xof) FROM payments p WHERE p.order_id=o.id),0) AS paid
+      FROM orders o WHERE o.business=? AND o.created_at>=? AND o.created_at<? ORDER BY o.created_at''',
+      [biz, f, t],
+    );
+    // Tous les jours de la période, même sans vente, pour un graphique continu.
+    final days = <String, PeriodStat>{};
+    String dayKey(DateTime d) => '${d.year}-${'${d.month}'.padLeft(2, '0')}-${'${d.day}'.padLeft(2, '0')}';
+    String dayLabel(DateTime d) => '${'${d.day}'.padLeft(2, '0')}/${'${d.month}'.padLeft(2, '0')}';
+    for (var d = DateTime(from.year, from.month, from.day); d.isBefore(to) && days.length < 400; d = DateTime(d.year, d.month, d.day + 1)) {
+      days[dayKey(d)] = PeriodStat(dayLabel(d));
+    }
+    final hours = [for (var h = 0; h < 24; h++) PeriodStat('${'$h'.padLeft(2, '0')}h')];
+    var orders = 0, items = 0, revenue = 0, collected = 0, cancelled = 0, cancelledTotal = 0, open = 0;
+    for (final r in orderRows) {
+      final total = _int(r['total']);
+      if (r['status'] == 'cancelled') {
+        cancelled++;
+        cancelledTotal += total;
+        continue;
+      }
+      if (r['status'] == 'open') open++;
+      final at = DateTime.parse(r['created_at'] as String).toLocal();
+      final qty = _int(r['qty']), cost = _int(r['cost']), revCost = _int(r['rev_cost']);
+      orders++;
+      items += qty;
+      revenue += total;
+      collected += _int(r['paid']);
+      for (final s in [days.putIfAbsent(dayKey(at), () => PeriodStat(dayLabel(at))), hours[at.hour]]) {
+        s.orders++;
+        s.items += qty;
+        s.revenue += total;
+        s.cost += cost;
+        s.revenueWithCost += revCost;
+      }
+    }
+    final methods = await db.rawQuery(
+      '''SELECT p.method, SUM(p.amount_xof) AS t FROM payments p JOIN orders o ON o.id=p.order_id
+      WHERE o.business=? AND o.status<>'cancelled' AND o.created_at>=? AND o.created_at<? GROUP BY p.method ORDER BY t DESC''',
+      [biz, f, t],
+    );
+    final prodRows = await db.rawQuery(
+      '''SELECT i.product_id, i.name_snapshot AS name, COALESCE(p.category,'Divers') AS category, SUM(i.quantity) AS qty, SUM(i.quantity*i.price_xof) AS revenue,
+        SUM(CASE WHEN i.cost_xof IS NULL THEN 0 ELSE i.quantity*i.cost_xof END) AS cost,
+        SUM(CASE WHEN i.cost_xof IS NULL THEN i.quantity ELSE 0 END) AS qty_no_cost,
+        COUNT(DISTINCT o.id) AS orders
+      FROM order_items i JOIN orders o ON o.id=i.order_id LEFT JOIN products p ON p.id=i.product_id
+      WHERE o.status<>'cancelled' AND o.business=? AND o.created_at>=? AND o.created_at<?
+      GROUP BY i.product_id, i.name_snapshot ORDER BY revenue DESC''',
+      [biz, f, t],
+    );
+    final products = [
+      for (final r in prodRows)
+        ProductProfit(
+          productId: r['product_id'] as String,
+          name: r['name'] as String,
+          quantity: _int(r['qty']),
+          revenue: _int(r['revenue']),
+          cost: _int(r['cost']),
+          quantityWithoutCost: _int(r['qty_no_cost']),
+        ),
+    ];
+    final cats = <String, GroupStat>{};
+    for (final r in prodRows) {
+      final c = cats.putIfAbsent(r['category'] as String, () => GroupStat(r['category'] as String));
+      c.items += _int(r['qty']);
+      c.revenue += _int(r['revenue']);
+      c.orders += _int(r['orders']);
+    }
+    final emp = await db.rawQuery(
+      '''SELECT COALESCE(u.name,'—') AS name, COUNT(DISTINCT o.id) AS orders, COALESCE(SUM(i.quantity),0) AS items, COALESCE(SUM(i.quantity*i.price_xof),0) AS revenue
+      FROM orders o LEFT JOIN users u ON u.id=o.server_id JOIN order_items i ON i.order_id=o.id
+      WHERE o.status<>'cancelled' AND o.business=? AND o.created_at>=? AND o.created_at<?
+      GROUP BY o.server_id ORDER BY revenue DESC''',
+      [biz, f, t],
+    );
+    final low = await db.query('products', where: 'business=? AND active=1 AND track_stock=1 AND stock_qty<=alert_qty', whereArgs: [biz], orderBy: 'stock_qty, name COLLATE NOCASE');
+    final stock = await db.rawQuery(
+      '''SELECT COALESCE(SUM(CASE WHEN stock_qty>0 AND cost_xof IS NOT NULL THEN stock_qty*cost_xof ELSE 0 END),0) AS vc,
+        COALESCE(SUM(CASE WHEN stock_qty>0 THEN stock_qty*price_xof ELSE 0 END),0) AS vs
+      FROM products WHERE active=1 AND track_stock=1 AND business=?''',
+      [biz],
+    );
+    return SalesReport(
+      from: from,
+      to: to,
+      business: BusinessMode.parse(biz),
+      orders: orders,
+      items: items,
+      revenue: revenue,
+      collected: collected,
+      cancelledCount: cancelled,
+      cancelledTotal: cancelledTotal,
+      openCount: open,
+      byMethod: {for (final m in methods) m['method'] as String: _int(m['t'])},
+      days: days.values.toList(),
+      hours: hours,
+      products: products,
+      categories: cats.values.toList()..sort((a, b) => b.revenue.compareTo(a.revenue)),
+      employees: [for (final r in emp) GroupStat(r['name'] as String, orders: _int(r['orders']), items: _int(r['items']), revenue: _int(r['revenue']))],
+      lowStock: [for (final r in low) LowStockItem(r['name'] as String, _int(r['stock_qty']), _int(r['alert_qty']))],
+      stockValueCost: _int(stock.first['vc']),
+      stockValueSale: _int(stock.first['vs']),
+    );
   }
 
   // ------------------------------------------------------------------ stocks
@@ -388,6 +652,8 @@ class PosRepository {
       case null:
         break;
     }
+    where.add('p.business=?');
+    args.add(await business());
     final rows = await db.rawQuery('''SELECT m.*, p.name AS product_name, p.image AS product_image, u.name AS user_name, o.number AS order_number
       FROM stock_movements m JOIN products p ON p.id=m.product_id LEFT JOIN users u ON u.id=m.user_id LEFT JOIN orders o ON o.id=m.order_id
       ${where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}'} ORDER BY m.created_at DESC, m.rowid DESC LIMIT $limit''', args);
@@ -460,6 +726,7 @@ class PosRepository {
       throw PermissionDenied('Un serveur ne peut enregistrer une commande qu\'à son propre nom');
     }
     final id = _uuid.v4();
+    final biz = await business();
     return db.transaction((tx) async {
       if (assigned != actor.id) {
         final u = await tx.query('users', columns: ['id'], where: 'id=? AND active=1', whereArgs: [assigned]);
@@ -473,6 +740,7 @@ class PosRepository {
         'status': 'open',
         'created_at': nowUtc(),
         'server_id': assigned,
+        'business': biz,
         'note': (note?.trim().isEmpty ?? true) ? null : note!.trim(),
       });
       await _insertLines(tx, actor, id, valid);
@@ -509,12 +777,12 @@ class PosRepository {
     FROM orders o LEFT JOIN users u ON u.id=o.server_id''';
 
   Future<List<OrderSummary>> openOrders() async {
-    final rows = await db.rawQuery("$_summarySql WHERE o.status='open' ORDER BY o.created_at DESC");
+    final rows = await db.rawQuery("$_summarySql WHERE o.status='open' AND o.business=? ORDER BY o.created_at DESC", [await business()]);
     return rows.map(OrderSummary.fromMap).toList();
   }
 
   Future<List<OrderSummary>> recentOrders({int limit = 100}) async {
-    final rows = await db.rawQuery('$_summarySql ORDER BY o.created_at DESC LIMIT $limit');
+    final rows = await db.rawQuery('$_summarySql WHERE o.business=? ORDER BY o.created_at DESC LIMIT $limit', [await business()]);
     return rows.map(OrderSummary.fromMap).toList();
   }
 
@@ -571,6 +839,7 @@ class PosRepository {
   Future<List<ServerSales>> serverSales(DateTime from, DateTime to) async {
     final f = from.toUtc().toIso8601String();
     final t = to.toUtc().toIso8601String();
+    final b = await business();
     final rows = await db.rawQuery(
       """SELECT u.id, u.name, u.role,
         COUNT(DISTINCT o.id) AS orders,
@@ -578,15 +847,15 @@ class PosRepository {
         COALESCE(SUM(CASE WHEN i.station='bar' THEN i.quantity ELSE 0 END),0) AS drinks,
         COALESCE(SUM(i.quantity*i.price_xof),0) AS revenue
       FROM orders o JOIN users u ON u.id=o.server_id JOIN order_items i ON i.order_id=o.id
-      WHERE o.status<>'cancelled' AND o.created_at>=? AND o.created_at<?
+      WHERE o.status<>'cancelled' AND o.created_at>=? AND o.created_at<? AND o.business=?
       GROUP BY u.id, u.name, u.role ORDER BY revenue DESC""",
-      [f, t],
+      [f, t, b],
     );
     final paid = await db.rawQuery(
       """SELECT o.server_id AS id, COALESCE(SUM(p.amount_xof),0) AS paid
       FROM orders o JOIN payments p ON p.order_id=o.id
-      WHERE o.status<>'cancelled' AND o.created_at>=? AND o.created_at<? GROUP BY o.server_id""",
-      [f, t],
+      WHERE o.status<>'cancelled' AND o.created_at>=? AND o.created_at<? AND o.business=? GROUP BY o.server_id""",
+      [f, t, b],
     );
     final paidBy = {for (final r in paid) r['id'] as String?: (r['paid'] as num).toInt()};
     return rows
@@ -610,9 +879,9 @@ class PosRepository {
     final rows = await db.rawQuery(
       """SELECT i.name_snapshot AS name, SUM(i.quantity) AS q, SUM(i.quantity*i.price_xof) AS t
       FROM order_items i JOIN orders o ON o.id=i.order_id
-      WHERE o.server_id=? AND o.status<>'cancelled' AND o.created_at>=? AND o.created_at<?
+      WHERE o.server_id=? AND o.status<>'cancelled' AND o.created_at>=? AND o.created_at<? AND o.business=?
       GROUP BY i.name_snapshot ORDER BY q DESC""",
-      [userId, from.toUtc().toIso8601String(), to.toUtc().toIso8601String()],
+      [userId, from.toUtc().toIso8601String(), to.toUtc().toIso8601String(), await business()],
     );
     return rows.map((r) => ProductSale(r['name'] as String, (r['q'] as num).toInt(), (r['t'] as num).toInt())).toList();
   }
@@ -972,6 +1241,7 @@ class PosRepository {
       }
       await _audit(tx, actor, 'settings_update', 'settings', null, values);
     });
+    if (values.containsKey('business_mode')) _bizCache = null;
   }
 
   Future<ShopInfo> shopInfo() async {

@@ -257,6 +257,8 @@ void main() {
     expect(await repo.businessMode(), BusinessMode.restaurant);
     await repo.saveSettings(owner, {'business_mode': 'shop'});
     expect(await repo.businessMode(), BusinessMode.shop);
+    expect(await repo.products(), isEmpty); // catalogue propre à la boutique
+    await repo.loadDemoCatalog(owner);
     final list = await repo.products();
     final a = list[0], b = list[1];
     await repo.saveProduct(owner, id: a.id, name: a.name, category: a.category, price: a.price, station: a.station, barcode: '3017620422003\r\n');
@@ -317,5 +319,119 @@ void main() {
     // Une serveuse ne voit pas les marges
     final awa = await repo.createUser(owner, name: 'Awa', role: Role.server, pin: '1357');
     await expectLater(repo.profitReport(awa, now, now), throwsA(isA<PermissionDenied>()));
+  });
+
+  test('établissements séparés : catalogue, stock et ventes ne se mélangent pas', () async {
+    final brakina = await product('Brakina');
+    await repo.openSession(owner, 0);
+    await order({'Brakina': 2});
+    await repo.saveSettings(owner, {'business_mode': 'pharmacy'});
+    expect(await repo.products(), isEmpty);
+    expect(await repo.openOrders(), isEmpty);
+    expect(await repo.recentOrders(), isEmpty);
+    final added = await repo.loadDemoCatalog(owner);
+    expect(added, 18);
+    final meds = await repo.products();
+    expect(meds.every((p) => p.image != null && p.cost != null && p.barcode != null && p.trackStock && p.stockQty > 0), isTrue);
+    expect(meds.any((p) => p.name == brakina.name), isFalse);
+    expect(await repo.demoProductsActive(), 18);
+    // Recharger ne duplique pas.
+    expect(await repo.loadDemoCatalog(owner), 0);
+    // Le même code-barres est permis dans un autre établissement.
+    await repo.saveSettings(owner, {'business_mode': 'shop'});
+    await repo.addProducts(owner, [NewProductInput(name: 'Test', category: 'Divers', price: 100, barcode: meds.first.barcode)]);
+    expect((await repo.productByBarcode(meds.first.barcode!))?.name, 'Test');
+    await repo.saveSettings(owner, {'business_mode': 'pharmacy'});
+    expect((await repo.productByBarcode(meds.first.barcode!))?.name, meds.first.name);
+    expect((await repo.stockMovements()).every((m) => m.reason == 'Livraison'), isTrue);
+    await repo.saveSettings(owner, {'business_mode': 'restaurant'});
+    expect((await repo.products()).length, 12);
+    expect((await repo.recentOrders()).length, 1);
+  });
+
+  test('ajout multiple : tout ou rien, stock initial et prix d\'achat tracés', () async {
+    await repo.saveSettings(owner, {'business_mode': 'shop'});
+    final n = await repo.addProducts(owner, [
+      NewProductInput(name: 'Bougie NGK', category: 'Allumage', price: 1200, cost: 700, stock: 30, barcode: '2200000999993'),
+      NewProductInput(name: 'Câble frein', category: 'Câbles', price: 1500, stock: 0),
+    ]);
+    expect(n, 2);
+    final bougie = (await repo.productByBarcode('2200000999993'))!;
+    expect(bougie.stockQty, 30);
+    expect(bougie.cost, 700);
+    expect((await repo.stockMovements(productId: bougie.id)).single.unitCost, 700);
+    // Doublon dans le lot ou avec le catalogue : rien n'est enregistré.
+    await expectLater(repo.addProducts(owner, [NewProductInput(name: 'A', category: 'X', price: 1), NewProductInput(name: 'a', category: 'X', price: 1)]), throwsA(isA<BusinessError>()));
+    await expectLater(
+      repo.addProducts(owner, [NewProductInput(name: 'Nouveau', category: 'X', price: 1), NewProductInput(name: 'Bougie NGK', category: 'X', price: 1)]),
+      throwsA(isA<BusinessError>()),
+    );
+    expect((await repo.products()).length, 2);
+  });
+
+  test('exemples supprimables et remise à zéro de l\'établissement', () async {
+    await repo.saveSettings(owner, {'business_mode': 'shop'});
+    await repo.loadDemoCatalog(owner);
+    final parts = await repo.products();
+    expect(parts.length, 18);
+    await repo.saveProduct(owner, name: 'Mon article', category: 'Divers', price: 500);
+    await repo.openSession(owner, 0);
+    final bougie = parts.firstWhere((p) => p.name.startsWith('Bougie'));
+    final oid = await repo.createOrder(owner, tableLabel: 'Vente directe', lines: [CartLine(bougie, 2)]);
+    await repo.pay(owner, req(oid, 2000, 'cash', received: 5000, changeAsCredit: true));
+    // La bougie a été vendue : elle est retirée de la vente ; les autres sont supprimées.
+    final (deleted, hidden) = await repo.deleteDemoProducts(owner);
+    expect(deleted, 17);
+    expect(hidden, 1);
+    expect((await repo.products()).map((p) => p.name), ['Mon article']);
+    // Remise à zéro : réservée au propriétaire, ne touche pas le maquis.
+    final cashier = await repo.createUser(owner, name: 'Ali', role: Role.manager, pin: '2468');
+    await expectLater(repo.resetBusinessData(await repo.login(cashier.id, '2468')), throwsA(isA<PermissionDenied>()));
+    await repo.resetBusinessData(owner);
+    expect(await repo.products(includeInactive: true), isEmpty);
+    expect(await repo.recentOrders(), isEmpty);
+    expect(await repo.stockMovements(), isEmpty);
+    expect((await repo.credits()).length, 1); // l'avoir du client reste valable
+    await repo.saveSettings(owner, {'business_mode': 'restaurant'});
+    expect((await repo.products()).length, 12);
+  });
+
+  test('rapport des ventes : jours, heures, articles, paiements, bénéfice', () async {
+    await repo.saveSettings(owner, {'business_mode': 'pharmacy'});
+    await repo.loadDemoCatalog(owner);
+    final meds = await repo.products();
+    final para = meds.firstWhere((p) => p.name.startsWith('Paracétamol 500'));
+    final gants = meds.firstWhere((p) => p.name.startsWith('Gants'));
+    await repo.openSession(owner, 0);
+    final o1 = await repo.createOrder(owner, tableLabel: 'Vente directe', lines: [CartLine(para, 4), CartLine(gants, 1)]);
+    await repo.pay(owner, req(o1, 4600, 'cash'));
+    final o2 = await repo.createOrder(owner, tableLabel: 'Vente directe', lines: [CartLine(para, 2)]);
+    await repo.pay(owner, req(o2, 300, 'mobile_money', ref: 'OM123'));
+    final o3 = await repo.createOrder(owner, tableLabel: 'Vente directe', lines: [CartLine(gants, 1)]);
+    await repo.cancelOrder(owner, o3, 'Erreur de saisie');
+    final now = DateTime.now();
+    final from = DateTime(now.year, now.month, 1), to = DateTime(now.year, now.month + 1, 1);
+    final r = await repo.salesReport(owner, from, to);
+    expect(r.orders, 2);
+    expect(r.items, 7);
+    expect(r.revenue, 4900);
+    expect(r.collected, 4900);
+    expect(r.averageBasket, 2450);
+    expect(r.cancelledCount, 1);
+    expect(r.cancelledTotal, 4000);
+    expect(r.byMethod, {'cash': 4600, 'mobile_money': 300});
+    expect(r.cost, 6 * 100 + 2800);
+    expect(r.profit, 4900 - 3400);
+    expect(r.days.length, DateTime(now.year, now.month + 1, 0).day);
+    expect(r.days.fold(0, (a, d) => a + d.revenue), 4900);
+    expect(r.hours[now.hour].orders, 2);
+    expect(r.products.first.name, gants.name);
+    expect(r.categories.map((c) => c.name), containsAll(['Matériel médical', 'Antalgiques']));
+    expect(r.employees.single.revenue, 4900);
+    // Le maquis ne voit pas ces ventes.
+    await repo.saveSettings(owner, {'business_mode': 'restaurant'});
+    expect((await repo.salesReport(owner, from, to)).orders, 0);
+    final awa = await repo.createUser(owner, name: 'Awa', role: Role.server, pin: '1357');
+    await expectLater(repo.salesReport(await repo.login(awa.id, '1357'), from, to), throwsA(isA<PermissionDenied>()));
   });
 }

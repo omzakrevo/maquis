@@ -5,7 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../theme.dart';
 
-const appVersion = '0.8.0';
+const appVersion = '0.9.0';
 
 /// Version, logo et crédits des photos embarquées (exigés par les licences CC BY / BY-SA).
 class AboutScreen extends StatelessWidget {

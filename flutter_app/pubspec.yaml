@@ -1,7 +1,7 @@
 name: maquis_resto_pro
 publish_to: none
 description: Caisse locale MAQUIS & RESTO PRO (V0.5, poste unique)
-version: 0.8.0+5011
+version: 0.9.0+5012
 environment:
   sdk: '>=3.9.0 <4.0.0'
 dependencies:
@@ -36,6 +36,8 @@ flutter:
     - assets/brand/logo_pharma_256.png
     - assets/brand/logo_pharma.png
     - assets/products/
+    - assets/demo/pharma/
+    - assets/demo/moto/
 
 flutter_launcher_icons:
   android: true

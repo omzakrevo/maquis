@@ -1,8 +1,15 @@
-# CAISSE PRO — V0.8 (anciennement MAQUIS & RESTO PRO, caisse sur poste unique)
+# CAISSE PRO — V0.9 (anciennement MAQUIS & RESTO PRO, caisse sur poste unique)
 
 Caisse pour maquis, bars, restaurants, boutiques et pharmacies, en FCFA, qui fonctionne **sans Internet sur un seul appareil**
 (tablette/téléphone Android ou PC Windows). Ce n'est pas encore une caisse multi-postes ni un SaaS :
 voir « Limites » plus bas.
+
+## Nouveautés V0.9 — rapports, ajout par scan, établissements séparés
+
+- **Gestion > Rapports** : journalier, mensuel, par date ou période ; nombre de ventes, articles, CA, encaissé, panier moyen, bénéfice, graphiques par jour et par heure, détail par article, catégorie, vendeur, mode de paiement, stock. Export **PDF**, **Excel** (7 feuilles) et **ticket** thermique.
+- **Produits** : « Scanner un article » (fiche pré-remplie avec le code) et « Ajout multiple » (scan à la chaîne, tout enregistré en une fois avec stock et prix d'achat).
+- Maquis, boutique et pharmacie : **catalogues, stocks et ventes séparés**.
+- **Gestion > Exemples et remise à zéro** : articles d'exemple avec photos (médicaments, pièces moto, boissons/plats), suppression des exemples, effacement complet de l'établissement en cours.
 
 ## Nouveautés V0.7 — déclinaison Pharmacie et prix d'achat
 

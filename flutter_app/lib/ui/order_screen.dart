@@ -809,8 +809,17 @@ class _ProductTileState extends State<_ProductTile> with SingleTickerProviderSta
                               fcfa(p.price),
                               style: TextStyle(color: AppColors.orange, fontWeight: FontWeight.w800, fontSize: widget.compact ? 13 : 14),
                             ),
-                            const Spacer(),
-                            if (p.trackStock && !p.lowStock && !widget.compact) Text('${p.stockQty} en stock', style: TextStyle(color: AppColors.muted, fontSize: 11)),
+                            const SizedBox(width: 4),
+                            if (p.trackStock && !p.lowStock && !widget.compact)
+                              Expanded(
+                                child: Text(
+                                  '${p.stockQty} en stock',
+                                  textAlign: TextAlign.right,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(color: AppColors.muted, fontSize: 11),
+                                ),
+                              ),
                           ],
                         ),
                       ],
